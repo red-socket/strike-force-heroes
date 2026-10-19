@@ -37,9 +37,10 @@ async function boot() {
   app.ticker.stop();
   initRuntime(lib, app.renderer, app.stage);
 
-  // Fit 800x600 into the window, rendering at device resolution so vector art stays crisp.
+  // Original 800x600 size, like the Flash embed (only shrunk if the window is smaller), rendered at
+  // the screen's pixel density so the vector art stays sharp on HiDPI displays.
   const fit = () => {
-    const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    const s = Math.min(1, window.innerWidth / W, window.innerHeight / H);
     app.renderer.resolution = Math.max(1, s * window.devicePixelRatio);
     app.renderer.resize(W, H);
     app.canvas.style.width = `${W * s}px`;
