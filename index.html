@@ -7,10 +7,15 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   #game { position: absolute; inset: 0; display: grid; place-items: center; }
+  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: #bbb;
+    font: 16px/1.4 system-ui, sans-serif; text-align: center; pointer-events: none; }
+  #loading .bar { width: 240px; height: 4px; background: #333; margin: 10px auto 0; }
+  #loading .bar > div { height: 100%; width: 0; background: #e8641b; transition: width .2s; }
 </style>
 </head>
 <body>
 <div id="game"></div>
+<div id="loading"><div><div id="loading-text">Loading…</div><div class="bar"><div id="loading-bar"></div></div></div></div>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

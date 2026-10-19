@@ -1,6 +1,6 @@
 // Port of Status.as — hp / armor / regeneration, timed status effects (glows), damage pipeline.
 import { BlurFilter, type Filter } from 'pixi.js';
-import { GlowFilter } from 'pixi-filters';
+import { FlashGlowFilter } from '../swf/flashFilters';
 import { uint } from '../flash/as3';
 import { UT } from './UT';
 import { SD } from './SD';
@@ -43,19 +43,9 @@ export class Status {
   /** flash.filters.GlowFilter(color, alpha, blurX, blurY, strength, quality, inner, knockout) */
   private glow(color: number, alpha = 1, blurX = 6, blurY = 6, strength = 2, quality = 1, inner = false, knockout = false): Filter {
     const key = `g${color}|${blurX}|${blurY}|${strength}|${quality}|${inner}|${knockout}`;
-    let f = this.filterCache.get(key) as GlowFilter | undefined;
+    let f = this.filterCache.get(key) as FlashGlowFilter | undefined;
     if (!f) {
-      // Same mapping as src/swf/effects.ts for timeline glows.
-      const d = Math.min(20, Math.max(1, Math.round(Math.max(blurX, blurY) / 2)));
-      f = new GlowFilter({
-        distance: d,
-        outerStrength: inner ? 0 : strength,
-        innerStrength: inner ? strength : 0,
-        color,
-        alpha: 1,
-        knockout,
-        quality: 0.2,
-      });
+      f = new FlashGlowFilter(color, alpha, blurX, blurY, strength, quality, inner, knockout);
       this.filterCache.set(key, f);
     }
     f.alpha = Math.max(0, Math.min(1, alpha));
@@ -67,7 +57,11 @@ export class Status {
     const key = `b${blurX}|${blurY}|${quality}`;
     let f = this.filterCache.get(key);
     if (!f) {
-      f = new BlurFilter({ strengthX: blurX * 0.5, strengthY: blurY * 0.5, quality: Math.max(1, quality) });
+      // Flash: `quality` box passes of width blurX → σ = blurX·√q/√12; Pixi's 9-tap pass has σ ≈ 1.864·strength
+      // (same mapping as src/swf/effects.ts).
+      const q = Math.max(1, quality);
+      const sigma = (b: number) => (b * Math.sqrt(q)) / Math.sqrt(12) / 1.864;
+      f = new BlurFilter({ strengthX: sigma(blurX), strengthY: sigma(blurY), quality: q, kernelSize: 9 });
       this.filterCache.set(key, f);
     }
     return f;

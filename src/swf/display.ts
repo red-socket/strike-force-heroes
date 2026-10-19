@@ -1,6 +1,9 @@
 import {
   AlphaFilter,
   AlphaMask,
+  CanvasTextGenerator,
+  CanvasTextMetrics,
+  fontStringFromTextStyle,
   Container,
   MaskEffectManager,
   FillGradient,
@@ -11,11 +14,13 @@ import {
   Rectangle,
   Sprite,
   Text,
+  type Texture,
   type BLEND_MODES,
   type Filter,
 } from 'pixi.js';
 import 'pixi.js/advanced-blend-modes';
-import { DarkenBlend, DifferenceBlend, HardLightBlend, LightenBlend, OverlayBlend, SubtractBlend } from 'pixi.js';
+// premultiplied-correct replacements for the Flash blend modes (registered over Pixi's after the import above)
+import { DarkenBlend, DifferenceBlend, HardLightBlend, LightenBlend, OverlayBlend, SubtractBlend } from './blendModes';
 import { applyColorTransform, toPixiFilters } from './effects';
 import type { Library } from './Library';
 import { Timeline, type DepthState } from './Timeline';
@@ -76,12 +81,91 @@ export function installSwfMasks(): void {
  * cacheAsBitmap, in which case the mask's alpha channel is used.
  */
 export function setFlashMask(target: Container, mask: Container | null): void {
+  const prev = target.mask as Container | null;
+  if (prev?.parent instanceof SwfShape && prev.parent.children[0] === prev) prev.parent.measurable = true;
   if (!mask) {
     target.mask = null;
     return;
   }
   const alpha = !!(target.swfCacheAsBitmap && mask.swfCacheAsBitmap);
-  target.setMask({ mask, channel: alpha ? 'alpha' : 'red' });
+  if (!alpha) addClearShapeCoverage(mask);
+  // A plain shape masks with its raster sprite directly (Pixi's sprite-mask path). Pixi's
+  // render-to-texture mask path misplaces the whole output when the masked object sits inside a
+  // filtered ancestor (e.g. the menu's locked medal icons: colour-matrix filter + clipDepth mask).
+  // The shape itself stays unmeasurable, as Pixi makes any mask object.
+  const m = mask instanceof SwfShape && !mask.maskCover ? mask.children[0] : mask;
+  target.setMask({ mask: m, channel: alpha ? 'alpha' : 'red' });
+  if (m !== mask) mask.measurable = false;
+}
+
+/**
+ * Flash ignores fill colour/alpha in a mask, but a shape filled with alpha 0 (e.g. the menu shop's
+ * `gunMask`) rasterises to an empty texture. Give such shapes a coverage rect over their declared bounds;
+ * it only ever renders as part of the mask (Pixi never draws a mask subtree normally).
+ * Approximation: exact for the rectangular invisible shapes the game uses as masks.
+ */
+function addClearShapeCoverage(o: Container): void {
+  if (o instanceof SwfShape) {
+    if (!o.maskCover && o.isClear()) {
+      const b = o.boundsArea;
+      o.maskCover = new Graphics().rect(b.x, b.y, b.width, b.height).fill(0xffffff);
+      o.addChild(o.maskCover);
+    }
+    return;
+  }
+  for (const c of o.children) addClearShapeCoverage(c);
+}
+const clearShapes = new Map<number, boolean>();
+
+/**
+ * If a rasterised shape is a single-colour axis-aligned rectangle filling its bounds, its colour as
+ * 0xAARRGGBB, else null. Cached per character; only small rasters are inspected.
+ */
+const solidRects = new Map<number, number | null>();
+function solidRectColor(id: number, tex: Texture): number | null {
+  let v = solidRects.get(id);
+  if (v !== undefined) return v;
+  v = null;
+  if (!tex?.frame) return v;
+  const res = tex.source?.resource as CanvasImageSource | undefined;
+  const { x, y, width: w, height: h } = tex.frame;
+  if (res && w >= 3 && h >= 3 && w * h <= 16384 && typeof OffscreenCanvas !== 'undefined') {
+    try {
+      const W = Math.round(w);
+      const H = Math.round(h);
+      const ctx = new OffscreenCanvas(W, H).getContext('2d', { willReadFrequently: true })!;
+      ctx.drawImage(res, x, y, w, h, 0, 0, W, H);
+      const px = ctx.getImageData(0, 0, W, H).data;
+      const at = (i: number, j: number) => (j * W + i) * 4;
+      const c0 = at(W >> 1, H >> 1);
+      const [r, g, b, a] = [px[c0], px[c0 + 1], px[c0 + 2], px[c0 + 3]];
+      let ok = a > 0;
+      // Interior (all but the 1-px anti-aliased rim) must be exactly that colour.
+      for (let j = 1; ok && j < H - 1; j++)
+        for (let i = 1; i < W - 1; i++) {
+          const k = at(i, j);
+          if (px[k] !== r || px[k + 1] !== g || px[k + 2] !== b || px[k + 3] !== a) {
+            ok = false;
+            break;
+          }
+        }
+      // The rim may only fade that colour out (no differently coloured outline).
+      for (let j = 0; ok && j < H; j++)
+        for (let i = 0; i < W; i += j === 0 || j === H - 1 ? 1 : W - 1) {
+          const k = at(i, j);
+          const tol = px[k + 3] < 64 ? 24 : 4;
+          if (px[k + 3] && (Math.abs(px[k] - r) > tol || Math.abs(px[k + 1] - g) > tol || Math.abs(px[k + 2] - b) > tol)) {
+            ok = false;
+            break;
+          }
+        }
+      if (ok) v = ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+    } catch {
+      v = null;
+    }
+    solidRects.set(id, v);
+  }
+  return v;
 }
 
 const BLEND: Record<string, BLEND_MODES> = {
@@ -140,10 +224,53 @@ export class SwfShape extends Container {
     // Measure by the declared shape bounds (the raster is rounded up to whole pixels).
     const [x0, y0, x1, y1] = c.bounds;
     this.boundsArea = new Rectangle(x0, y0, x1 - x0, y1 - y0);
-    const s = new Sprite(lib.texture(id));
+    const tex = lib.texture(id);
+    const fill = solidRectColor(id, tex);
+    if (fill !== null) {
+      // A plain filled rectangle (e.g. the 46.5×4.9 unit bar stretched 100× into backgrounds and
+      // masks): draw it as geometry, since a magnified raster smears its anti-aliased rim by
+      // tens of pixels (and masks would leak through that rim).
+      this.addChild(new Graphics().rect(x0, y0, x1 - x0, y1 - y0).fill({ color: fill & 0xffffff, alpha: (fill >>> 24) / 255 }));
+      return;
+    }
+    const s = new Sprite(tex);
     s.position.set(c.origin[0], c.origin[1]);
     s.scale.set(1 / c.scale);
     this.addChild(s);
+  }
+
+  /** Mask-only coverage for a fully transparent shape (see addClearShapeCoverage). */
+  maskCover?: Graphics;
+
+  /** True when the rasterised shape has no visible pixel (all fills alpha 0). Cached per character. */
+  isClear(): boolean {
+    let v = clearShapes.get(this.charId);
+    if (v === undefined) {
+      v = false;
+      const spr = this.children[0];
+      if (!(spr instanceof Sprite)) return false; // drawn as geometry (solid rectangle): never clear
+      const tex = spr.texture;
+      const res = tex?.source?.resource as CanvasImageSource | undefined;
+      const { x, y, width: w, height: h } = tex.frame;
+      if (res && w >= 1 && h >= 1 && typeof OffscreenCanvas !== 'undefined') {
+        try {
+          const ctx = new OffscreenCanvas(Math.ceil(w), Math.ceil(h)).getContext('2d')!;
+          ctx.drawImage(res, x, y, w, h, 0, 0, w, h);
+          const px = ctx.getImageData(0, 0, Math.ceil(w), Math.ceil(h)).data;
+          v = true;
+          for (let i = 3; i < px.length; i += 4) {
+            if (px[i]) {
+              v = false;
+              break;
+            }
+          }
+        } catch {
+          v = false;
+        }
+      }
+      clearShapes.set(this.charId, v);
+    }
+    return v;
   }
 }
 
@@ -238,7 +365,9 @@ export class SwfClip extends Container {
     if (f === undefined) {
       const n = Number(frame);
       if (!Number.isNaN(n)) return this.resolve(n);
-      throw new Error(`frame label "${frame}" not found in ${this.className ?? this.charId}`);
+      // Flash player (as Ruffle shows) does not throw for an unknown label: it goes to frame 1.
+      // The game relies on it, e.g. Guns.setGuns("none","none") in the tutorial → empty gun frame 1.
+      return 1;
     }
     return f;
   }
@@ -442,7 +571,9 @@ function rebuildFilters(obj: SwfObj): void {
     }
     list.push(obj._blendFilter);
   } else {
-    obj.blendMode = BLEND[blend] ?? 'normal';
+    // 'normal' must stay 'inherit' in Pixi: an explicit 'normal' would cut off a blended parent's mode
+    // (e.g. an overlay light clip whose child shapes are placed with the default blend).
+    obj.blendMode = blend === 'normal' || blend === 'layer' ? 'inherit' : (BLEND[blend] ?? 'normal');
   }
   obj.filters = list.length ? list : null;
 }
@@ -560,14 +691,39 @@ function morphGradient(gr: NonNullable<MorphDef['paths'][number]['fill']>['gradi
 
 // ------------------------------------------------------------------ text fields
 
+/**
+ * Flash lays text out with fractional glyph advances. Chrome's canvas rounds each advance to whole
+ * pixels unless geometric precision is requested, which made Pixi wrap lines earlier than Flash
+ * (e.g. the menu medal descriptions). The measuring canvas is never resized, so this sticks.
+ */
+let textPrecisionSet = false;
+function useGeometricTextMetrics(): void {
+  if (textPrecisionSet) return;
+  textPrecisionSet = true;
+  const ctx = CanvasTextMetrics._context as unknown as { textRendering?: string };
+  if (!ctx || !('textRendering' in ctx)) return;
+  ctx.textRendering = 'geometricPrecision';
+  // Draw with the same advances (pooled canvases are resized per text, which resets context state),
+  // or glyph runs end up wider than the measured texture and get cut at the right edge.
+  const gen = CanvasTextGenerator as unknown as { _renderTextToCanvas: (...a: any[]) => void };
+  const render = gen._renderTextToCanvas;
+  gen._renderTextToCanvas = function (this: unknown, ...a: any[]) {
+    (a[3].context as { textRendering: string }).textRendering = 'geometricPrecision';
+    return render.apply(this, a);
+  };
+}
+
 export class SwfTextField extends Container {
   readonly def: EditTextDef;
   private field: Text;
   private _text = '';
   private boundsRect: Rectangle;
+  /** Clip rect, present only while the text overflows the box (Flash clips text to the field). */
+  private clip: Graphics | null = null;
 
   constructor(lib: Library, def: EditTextDef) {
     super();
+    useGeometricTextMetrics();
     this.def = def;
     const [x0, y0, x1, y1] = def.bounds;
     this.boundsRect = new Rectangle(x0, y0, x1 - x0, y1 - y0);
@@ -630,7 +786,24 @@ export class SwfTextField extends Container {
       else if (this.def.align === 'right') x = b.x + b.width - 2 - w;
     } else if (this.def.align === 'center') x = b.x + 2 + (b.width - 4 - w) / 2;
     else if (this.def.align === 'right') x = b.x + b.width - 2 - w;
-    this.field.position.set(x, b.y + 2);
+    // Pixi centres each line in its lineHeight box; Flash adds the leading below the line instead.
+    const st = this.field.style;
+    const lh = st.lineHeight;
+    const shift = lh ? Math.max(0, (lh - CanvasTextMetrics.measureFont(fontStringFromTextStyle(st)).fontSize) / 2) : 0;
+    this.field.position.set(x, b.y + 2 - shift);
+    // Flash clips a field's text to its box (e.g. a wrapped second line in a one-line field).
+    // Only clip on a real overflow so small metric differences never shave glyphs.
+    const fy = this.field.y;
+    const over = !this.def.autoSize && (fy + this.field.height > b.y + b.height + 2 || x < b.x - 2 || x + w > b.x + b.width + 2);
+    if (over && !this.clip) {
+      this.clip = new Graphics().rect(b.x, b.y, b.width, b.height).fill(0xffffff);
+      this.addChild(this.clip);
+      this.field.mask = this.clip;
+    } else if (!over && this.clip) {
+      this.field.mask = null;
+      this.clip.destroy();
+      this.clip = null;
+    }
   }
 }
 

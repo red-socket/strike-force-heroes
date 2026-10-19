@@ -63,8 +63,9 @@ export class Hud extends Symbol {
     return this.child<SwfClip>('icon');
   }
 
+  /** only on the pause/end frames (null elsewhere, like an AS3 timeline var) */
   get logo1(): SwfClip {
-    return this.child<SwfClip>('logo1');
+    return this.maybeChild<SwfClip>('logo1') as SwfClip;
   }
 
   get cb_voices(): CheckBox {
@@ -99,8 +100,9 @@ export class Hud extends Symbol {
     return this.child<SwfTextField>('txt_classname');
   }
 
+  /** only on the pause/end frames (null elsewhere, like an AS3 timeline var) */
   get logo2(): SwfClip {
-    return this.child<SwfClip>('logo2');
+    return this.maybeChild<SwfClip>('logo2') as SwfClip;
   }
 
   get cc4(): SwfClip {
@@ -750,6 +752,9 @@ export class Hud extends Symbol {
       this.game.togglePause();
     }
     // AS3 SD.pressLogos(this, logo1, logo2) reads this.mouseX/mouseY; the TS signature takes them.
+    // After "Resume" the Hud is already back on "idle" (no logos) and AS3 threw #1009 here, ending the
+    // handler; nothing follows, so skipping the call is equivalent without the uncaught error.
+    if (this.destroyed || !this.logo1 || !this.logo2) return;
     SD.pressLogos(this, this.logo1, this.logo2, mouseX(this), mouseY(this));
   }
 

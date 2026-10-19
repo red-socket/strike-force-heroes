@@ -26,10 +26,15 @@ function snapshots(): Plugin {
 }
 
 export default defineConfig({
+  // Relative URLs so the build works from any sub-path (e.g. GitHub Pages /strike-force-heroes/).
+  base: './',
   plugins: [snapshots()],
   server: { host: '127.0.0.1', port: 5173 },
   build: {
     target: 'es2022',
-    rollupOptions: { input: { main: 'index.html', viewer: 'viewer.html' } },
+    assetsDir: 'build', // keep Vite's output apart from the game's public/assets/
+    chunkSizeWarningLimit: 2000,
+    // The symbol viewer (viewer.html) is a dev-server tool and is not part of the published build.
+    rollupOptions: { input: { main: 'index.html' } },
   },
 });

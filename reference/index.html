@@ -1,14 +1,99 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>SFH reference (Ruffle)</title>
-<style>html,body{margin:0;background:#111;height:100%;display:grid;place-items:center}</style>
-<script src="/tools/ruffle-web/ruffle.js"></script></head>
-<body><div id="c"></div>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SFH reference (Ruffle)</title>
+<style>
+  html, body { margin: 0; background: #111; }
+  #c { width: 800px; height: 600px; }
+</style>
 <script>
-  // Serve repo root: python3 -m http.server 8080  → http://localhost:8080/reference/
+  if (new URLSearchParams(location.search).has('shim')) {
+  // ?shim — the automation browser pane can be hidden, which stops requestAnimationFrame (and Ruffle).
+  // Timers keep running, so drive rAF from a 60 Hz timer instead.
+  // Snapshots must be taken right after Ruffle draws (WebGL buffers are not preserved), so the shim
+  // runs queued after-frame hooks in the same task. Also report the page as visible so Ruffle never pauses.
+  window.__afterFrame = [];
+  window.requestAnimationFrame = (cb) => setTimeout(() => {
+    cb(performance.now());
+    const hooks = window.__afterFrame.splice(0);
+    for (const h of hooks) h();
+  }, 1000 / 60);
+  window.cancelAnimationFrame = (id) => clearTimeout(id);
+  Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+  Object.defineProperty(document, 'hidden', { get: () => false });
+  }
+</script>
+<script src="/tools/ruffle-web/ruffle.js"></script>
+</head>
+<body>
+<div id="c"></div>
+<script>
+  // Original game in Ruffle, for side-by-side comparison with the port.
+  // Serve the repo root (e.g. `npm run dev` → http://127.0.0.1:5173/reference/?mute).
+  //   ?mute       start silent
+  // window.ref (console / test scripts), coordinates in 800x600 stage space:
+  //   ref.click(x, y), ref.down(x, y), ref.up(x, y), ref.move(x, y), ref.key(code, down?), ref.tap(code)
+  //   await ref.snap(name)  → .snaps/<name>.png (Vite dev server only)
+  //   await ref.wait(ms)
+  const params = new URLSearchParams(location.search);
   const p = window.RufflePlayer.newest().createPlayer();
-  p.style.width = "800px"; p.style.height = "600px";
-  document.getElementById("c").appendChild(p);
-  // Append ?mute to start silent.
-  const mute = new URLSearchParams(location.search).has("mute");
-  p.load({ url: "/original/strike-force-heroes.swf", autoplay: "on", letterbox: "on", volume: mute ? 0 : 1 });
-</script></body></html>
+  p.style.width = '800px';
+  p.style.height = '600px';
+  document.getElementById('c').appendChild(p);
+  p.load({
+    url: '/original/strike-force-heroes.swf',
+    autoplay: 'on',
+    unmuteOverlay: 'hidden',
+    letterbox: 'off',
+    volume: params.has('mute') ? 0 : 1,
+    splashScreen: false,
+  });
+
+  // With software WebGL (headless test browsers) Ruffle adds a hardware-acceleration warning modal
+  // that swallows pointer events even while invisible; remove it whenever it appears.
+  setInterval(() => p.shadowRoot?.querySelector('#hardware-acceleration-modal')?.remove(), 250);
+
+  const canvas = () => p.shadowRoot.querySelector('canvas');
+  const at = (type, x, y, buttons) => {
+    const c = canvas();
+    const r = c.getBoundingClientRect();
+    const ev = new PointerEvent(type, {
+      bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+      clientX: r.left + (x / 800) * r.width, clientY: r.top + (y / 600) * r.height, button: 0, buttons,
+    });
+    c.dispatchEvent(ev);
+  };
+  const keyInfo = (code) => {
+    const map = { 32: [' ', 'Space'], 37: ['ArrowLeft', 'ArrowLeft'], 38: ['ArrowUp', 'ArrowUp'], 39: ['ArrowRight', 'ArrowRight'],
+      40: ['ArrowDown', 'ArrowDown'], 27: ['Escape', 'Escape'], 13: ['Enter', 'Enter'], 16: ['Shift', 'ShiftLeft'], 17: ['Control', 'ControlLeft'],
+      8: ['Backspace', 'Backspace'] };
+    if (map[code]) return map[code];
+    const ch = String.fromCharCode(code);
+    return [ch.toLowerCase(), /[A-Z]/.test(ch) ? 'Key' + ch : 'Digit' + ch];
+  };
+  window.ref = {
+    player: p,
+    move: (x, y) => at('pointermove', x, y, 0),
+    down: (x, y) => (at('pointermove', x, y, 0), at('pointerdown', x, y, 1)),
+    up: (x, y) => at('pointerup', x, y, 0),
+    click(x, y) { this.down(x, y); this.up(x, y); },
+    key(code, down = true) {
+      const [key, kcode] = keyInfo(code);
+      const ev = new KeyboardEvent(down ? 'keydown' : 'keyup', { key, code: kcode, keyCode: code, which: code, bubbles: true, composed: true });
+      p.focus();
+      (p.shadowRoot.activeElement || p).dispatchEvent(ev);
+      window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { key, code: kcode, keyCode: code, which: code, bubbles: true }));
+    },
+    async tap(code, ms = 60) { this.key(code, true); await this.wait(ms); this.key(code, false); },
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    async snap(name = 'ref') {
+      // Capture in the same task as Ruffle's next draw.
+      const url = await new Promise((r) => window.__afterFrame.push(() => r(canvas().toDataURL('image/png'))));
+      await fetch(`/__snap?name=${encodeURIComponent(name)}`, { method: 'POST', body: url });
+      return name;
+    },
+  };
+</script>
+</body>
+</html>

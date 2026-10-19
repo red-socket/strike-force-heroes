@@ -1,5 +1,5 @@
 // Port of Guns.as — per-unit weapon state: ammo, firing, spread, reload, swapping.
-import { BevelFilter } from 'pixi-filters';
+import { FlashBevelFilter } from '../swf/flashFilters';
 import { int, trace, uint } from '../flash/as3';
 import type { SwfClip } from '../swf/display';
 import { SD } from './SD';
@@ -14,6 +14,8 @@ export class Guns {
   private unit: Unit;
   private shootDelay = 0; // uint
   private shotPressed = false;
+  /** Port addition: cached muzzle-flash bevels (see shoot()). */
+  private bevels: FlashBevelFilter[] = [];
   reloading = false;
   reflecting = NaN;
   curFrame: string | null = null;
@@ -298,17 +300,11 @@ export class Guns {
             );
           }
           if (SD.graphPart == 2 || (SD.graphPart == 1 && this.unit.human)) {
-            // Flash: new BevelFilter(7, aim+90, 0xFFFF99|0xFFFFCC, 1, 0x000000, 0.5, 10, 10, 1, 1)
-            this.unit.MCfilters.push(
-              new BevelFilter({
-                rotation: this.unit.aimRoation + 90,
-                thickness: 7,
-                lightColor: Math.random() >= 0.5 ? 16777113 : 16777164,
-                lightAlpha: 1,
-                shadowColor: 0,
-                shadowAlpha: 0.5,
-              }),
-            );
+            // Flash: new BevelFilter(7, aim+90, 0xFFFF99|0xFFFFCC, 1, 0, 0.5, 10, 10, 1, 1) per shot; two cached
+            // instances per unit are re-aimed instead (MCfilters only lives for one frame).
+            const _bc = Math.random() >= 0.5 ? 0 : 1;
+            this.bevels[_bc] ??= new FlashBevelFilter(7, 0, _bc == 0 ? 16777113 : 16777164, 1, 0, 0.5, 10, 10, 1, 1);
+            this.unit.MCfilters.push(this.bevels[_bc].setAngle(this.unit.aimRoation + 90));
           }
           this.shootDelay = uint(this.curGun.shootDelay * 30);
           if (!this.curGun.extra.noAmmo && MatchSettings.useMod != 'ammo') {

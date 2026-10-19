@@ -1,8 +1,8 @@
 // Boot: load the converted SWF library, create the Pixi app and run the fixed 30 Hz loop.
-import { Application, Rectangle } from 'pixi.js';
+import { Application } from 'pixi.js';
 import { toFlashKey } from './flash/as3';
 import { initRuntime, mouse } from './flash/runtime';
-import { audioContext, installTimelineSound, loadSounds, setMasterVolume } from './flash/sound';
+import { installTimelineSound, loadSounds, setMasterVolume } from './flash/sound';
 import { Library } from './swf/Library';
 import { SwfClip, installSwfMasks } from './swf/display';
 import { Main } from './game/Main';
@@ -18,6 +18,13 @@ async function boot() {
   const host = document.getElementById('game')!;
   // ?mute starts with all audio silenced (dev/testing).
   if (new URLSearchParams(location.search).has('mute')) setMasterVolume(0);
+  const status = (text: string, frac?: number) => {
+    const t = document.getElementById('loading-text');
+    const bar = document.getElementById('loading-bar');
+    if (t) t.textContent = text;
+    if (bar && frac !== undefined) bar.style.width = `${Math.round(frac * 100)}%`;
+  };
+  status('Loading game data…', 0.05);
   const lib = await Library.load();
   const app = new Application();
   await app.init({ width: W, height: H, background: 0x000000, antialias: true, autoDensity: true, resolution: 1, useBackBuffer: true, preference: 'webgl' });
@@ -37,8 +44,9 @@ async function boot() {
   fit();
   window.addEventListener('resize', fit);
 
+  status('Loading sounds and graphics…', 0.3);
   await Promise.all([
-    loadSounds(lib),
+    loadSounds(lib, 'assets/', (d, n) => status('Loading sounds and graphics…', 0.3 + 0.6 * (d / n))),
     lib.preloadClasses(['LoaderScreen', 'BH', 'Logo_Armor', 'Logo_NotDoppler', 'Logo_Sky9Games', 'Menu', 'Hud', 'UnitMC']),
   ]);
   installTimelineSound(lib, () => SD.sound);
@@ -47,6 +55,7 @@ async function boot() {
 
   const main = new Main();
   app.stage.addChild(main);
+  document.getElementById('loading')?.remove();
 
   // --- input (Flash stage events) ---
   const toStage = (e: PointerEvent | WheelEvent) => {
@@ -81,86 +90,41 @@ async function boot() {
     main.KeyDown(toFlashKey(e));
   });
   window.addEventListener('keyup', (e) => main.KeyUp(toFlashKey(e)));
-  window.addEventListener('blur', () => main.flashDeactivate());
+  // Flash's DEACTIVATE auto-pauses matches; the dev harness can opt out for background-tab testing.
+  window.addEventListener('blur', () => !(window as any).sfhIgnoreBlur && main.flashDeactivate());
   window.addEventListener('focus', () => main.flashActivate());
 
   // --- fixed-step loop: timelines advance, then game logic, then render ---
   let acc = 0;
   let last = performance.now();
   const frame = (now: number) => {
+    requestAnimationFrame(frame);
+    if ((window as any).sfhPaused) {
+      // Test harness drives the game with sfh.step(); keep the real-time loop out of the way.
+      last = now;
+      acc = 0;
+      return;
+    }
     acc += Math.min(200, now - last);
     last = now;
     let stepped = false;
     while (acc >= TICK) {
       acc -= TICK;
-      SwfClip.tick(app.stage);
-      main.EnterFrame();
-      SwfClip.flushPending();
+      // Like Flash, an uncaught error aborts the rest of this frame's handler but not the player.
+      try {
+        SwfClip.tick(app.stage);
+        main.EnterFrame();
+        SwfClip.flushPending();
+      } catch (e) {
+        console.error(e);
+      }
       stepped = true;
     }
     if (stepped) app.render();
-    requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
-  // Dev hooks: drive the game deterministically from tests / the console (works in hidden tabs).
-  const step = (n = 1) => {
-    for (let i = 0; i < n; i++) {
-      SwfClip.tick(app.stage);
-      main.EnterFrame();
-      SwfClip.flushPending();
-    }
-    app.render();
-  };
-  /** Click at stage coordinates (800x600 space). */
-  const click = (x: number, y: number) => {
-    mouse.x = x;
-    mouse.y = y;
-    mouse.down = true;
-    main.MouseDown();
-    mouse.down = false;
-    main.MouseUp();
-  };
-  /** Save the current frame to .snaps/<name>.png via the dev server. */
-  const snap = async (name = 'snap') => {
-    app.render();
-    const url = await app.renderer.extract.base64({ target: app.stage, frame: new Rectangle(0, 0, W, H), resolution: 1 });
-    await fetch(`/__snap?name=${encodeURIComponent(name)}`, { method: 'POST', body: url });
-    return name;
-  };
-  const mute = (on = true) => setMasterVolume(on ? 0 : 1);
-  /** Dev: click through loader → logos → menu → Quick Match with `bots` added, and start it. */
-  const quickmatch = async (bots = 3) => {
-    const cur = () => main.children[0] as any;
-    const centre = (o: any) => {
-      const b = o.getBounds();
-      return [b.x + b.width / 2, b.y + b.height / 2] as const;
-    };
-    step(3);
-    click(...centre(cur().txt_play));
-    step(45);
-    for (let i = 0; i < 3; i++) {
-      try {
-        click(...centre(cur().skip));
-      } catch {
-        /* no skip button */
-      }
-      step(5);
-    }
-    step(60);
-    if (cur().child('menfr').currentLabel === 'name') (click(390, 533), step(40));
-    click(120, 584); // Play
-    step(30);
-    click(160, 533); // Quick Match
-    step(30);
-    if (cur().child('menfr').currentLabel !== 'quickmatch') (click(500, 393), step(40)); // tutorial warning
-    for (let i = 0; i < bots; i++) (click(362, 445), step(3));
-    click(680, 520); // Start Game
-    const t0 = performance.now();
-    while (cur()?.constructor.name !== 'Game' && performance.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
-    step(1);
-    return cur();
-  };
-  (window as any).sfh = { app, lib, main, step, click, snap, mouse, mute, quickmatch, audio: audioContext() };
+  // Test harness (window.sfh): always in dev, in builds only with ?harness.
+  if (import.meta.env.DEV || new URLSearchParams(location.search).has('harness')) (await import('./dev')).installDevHarness(app, lib, main);
 }
 
 boot();

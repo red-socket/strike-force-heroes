@@ -1,6 +1,7 @@
 import { BlurFilter, ColorMatrixFilter, Container, Filter } from 'pixi.js';
-import { BevelFilter, DropShadowFilter, GlowFilter } from 'pixi-filters';
+import { BevelFilter, DropShadowFilter } from 'pixi-filters';
 import type { CX, FlashFilter } from './types';
+import { FlashBevelFilter, FlashGlowFilter } from './flashFilters';
 
 const rgb = (c: number[]) => (c[0] << 16) | (c[1] << 8) | c[2];
 
@@ -26,44 +27,50 @@ function convert(f: FlashFilter): Filter | null {
   switch (f.type) {
     case 'blur': {
       if (f.blurX <= 1 && f.blurY <= 1) return null;
+      // Flash runs `passes` box blurs of width blurX: σ = blurX·√passes/√12. Pixi's 9-tap Gaussian
+      // pass spreads σ ≈ 1.864·strength (its passes keep σ and only smooth the result).
+      const passes = Math.max(1, f.passes);
+      const sigma = (b: number) => (b * Math.sqrt(passes)) / Math.sqrt(12) / 1.864;
       return new BlurFilter({
-        strengthX: blurStrength(f.blurX),
-        strengthY: blurStrength(f.blurY),
-        quality: Math.max(1, f.passes),
+        strengthX: sigma(f.blurX),
+        strengthY: sigma(f.blurY),
+        quality: passes,
+        kernelSize: 9,
       });
     }
-    case 'glow': {
-      const d = Math.min(20, Math.max(1, Math.round(Math.max(f.blurX, f.blurY) / 2)));
-      return new GlowFilter({
-        distance: d,
-        outerStrength: f.inner ? 0 : f.strength,
-        innerStrength: f.inner ? f.strength : 0,
-        color: rgb(f.color),
-        alpha: f.color[3] / 255,
-        knockout: f.knockout,
-        quality: 0.2,
-      });
-    }
+    case 'glow':
+      return new FlashGlowFilter(rgb(f.color), f.color[3] / 255, f.blurX, f.blurY, f.strength, Math.max(1, f.passes), f.inner, f.knockout);
     case 'dropShadow': {
       if (f.inner) return null; // not supported by pixi-filters; rare
       return new DropShadowFilter({
         offset: { x: Math.cos(f.angle) * f.distance, y: Math.sin(f.angle) * f.distance },
         color: rgb(f.color),
         alpha: Math.min(1, (f.color[3] / 255) * f.strength),
-        blur: blurStrength(Math.max(f.blurX, f.blurY)) / 2,
+        // Flash blur is a box width; pixi-filters' Kawase blur strength is roughly a radius.
+        blur: Math.max(f.blurX, f.blurY) / 2,
         shadowOnly: f.knockout,
         quality: Math.max(1, f.passes),
       });
     }
-    case 'bevel':
+    case 'bevel': {
+      if (f.inner && !f.onTop) {
+        // SWF stores the highlight colour first (the spec's field order is wrong; Ruffle reads it so),
+        // so the pipeline's `shadow` is Flash's highlight and vice versa.
+        const hi = f.shadow;
+        const sh = f.highlight;
+        return new FlashBevelFilter(f.distance, (f.angle * 180) / Math.PI, rgb(hi), hi[3] / 255, rgb(sh), sh[3] / 255, f.blurX, f.blurY, f.strength, Math.max(1, f.passes), f.knockout);
+      }
+      // Flash strength scales the bevel's intensity; Pixi's bevel has no blur, so soften via alpha.
+      const k = Math.min(1, f.strength) * (f.blurX > 2 || f.blurY > 2 ? 0.75 : 1);
       return new BevelFilter({
         rotation: (f.angle * 180) / Math.PI,
         thickness: f.distance,
-        lightColor: rgb(f.highlight),
-        lightAlpha: f.highlight[3] / 255,
-        shadowColor: rgb(f.shadow),
-        shadowAlpha: f.shadow[3] / 255,
+        lightColor: rgb(f.shadow),
+        lightAlpha: (f.shadow[3] / 255) * k,
+        shadowColor: rgb(f.highlight),
+        shadowAlpha: (f.highlight[3] / 255) * k,
       });
+    }
     case 'colorMatrix': {
       const cm = new ColorMatrixFilter();
       const m = f.matrix.slice() as number[];

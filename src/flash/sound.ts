@@ -116,7 +116,7 @@ export function sound(name: string): SoundAsset {
 }
 
 /** Decode every sound referenced by the library (≈3.7 MB of MP3). */
-export async function loadSounds(lib: Library, assetBase = 'assets/'): Promise<void> {
+export async function loadSounds(lib: Library, assetBase = 'assets/', onProgress?: (done: number, total: number) => void): Promise<void> {
   base = assetBase;
   const ac = audioContext();
   const files = new Set<string>();
@@ -127,6 +127,7 @@ export async function loadSounds(lib: Library, assetBase = 'assets/'): Promise<v
       if (cls) assets.set(cls, new SoundAsset(cls, c.file));
     } else if (c.type === 'sprite' && c.stream) files.add(c.stream.file);
   }
+  let done = 0;
   await Promise.all(
     [...files].map(async (f) => {
       try {
@@ -135,6 +136,7 @@ export async function loadSounds(lib: Library, assetBase = 'assets/'): Promise<v
       } catch (e) {
         console.warn('sound', f, e);
       }
+      onProgress?.(++done, files.size);
     }),
   );
 }

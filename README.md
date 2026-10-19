@@ -6,6 +6,8 @@ A re-implementation of the Flash game *Strike Force Heroes* in TypeScript, runni
 The game logic is a faithful port of the original ActionScript 3; the original art, animation timelines,
 sounds and fonts are converted from the SWF into `public/assets/`.
 
+**Play online:** https://red-socket.github.io/strike-force-heroes/
+
 ## Run
 
 ```bash
@@ -17,6 +19,13 @@ npm run dev        # http://127.0.0.1:5173/
 
 Controls: WASD / arrow keys to move, W / Space to jump, mouse to aim and shoot, R to reload,
 Q / Shift / mouse wheel to swap weapons, E / Ctrl for killstreaks, Esc / P to pause.
+
+## Comparing with the original
+
+`tests/` drives the original SWF (in [Ruffle](https://ruffle.rs/)) and the port side by side in headless Chromium
+with Playwright (`npx playwright install chromium` once). It needs the original SWF in `original/`, Ruffle's
+self-hosted web build in `tools/ruffle-web/`, the repo root served on `127.0.0.1:8765`, and the port served
+(`npm run dev`, or `tests/serve-build.sh <name> <port>` for an isolated build). See `tests/lib.mjs`.
 
 ## Rebuilding the assets from the SWF
 

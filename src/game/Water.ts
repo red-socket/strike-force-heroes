@@ -188,7 +188,7 @@ export class Water extends Graphics {
       this.lineTo(MC.x, MC.y + MC.height);
       this.lineTo(this.dots[0].x, this.dots[0].y);
       this.fill({ color: col, alpha: 0.8 });
-      this.stroke({ width: 2, color: col, alpha: 1 });
+      this.stroke({ width: 2, color: col, alpha: 1, cap: 'round', join: 'round', miterLimit: 3 }); // Flash lineStyle defaults
       return;
     }
   }
