@@ -72,6 +72,12 @@ export function installDevHarness(app: Application, lib: Library, main: Main): v
   /** Skip loader + render the BH cache, land on the Menu (no sponsor logos). */
   const toMenu = async () => {
     if (cur() instanceof Menu) return cur();
+    if ((main as any).bitHandler?.complete && cur()) {
+      // Already past startup (e.g. in a match or cutscene): switch screens directly.
+      main.startClass(Menu);
+      step(2);
+      return cur();
+    }
     if (!(main as any).bitHandler) {
       Main.DEBUGMODE = true;
       main.loadDone();

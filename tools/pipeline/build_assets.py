@@ -19,6 +19,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
 import swf
+import vectors
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SWF = os.path.join(ROOT, 'original', 'strike-force-heroes.swf')
@@ -244,13 +245,37 @@ def main():
     lib = swf.parse_swf(SWF)
     chars = lib['characters']
 
-    # --- rasterise shapes and static texts
+    # --- vector data for shapes and static texts (drawn natively by the runtime at screen resolution)
+    print('converting vectors…')
+    shutil.rmtree(os.path.join(OUT, 'vec'), ignore_errors=True)
+    os.makedirs(os.path.join(OUT, 'vec'))
+    chunk, chunk_size, chunk_no, n_vec = {}, 0, 0, 0
+
+    def flush_chunk():
+        nonlocal chunk, chunk_size, chunk_no
+        if chunk:
+            with open(os.path.join(OUT, 'vec', f'v{chunk_no}.json'), 'w') as f:
+                json.dump(chunk, f, separators=(',', ':'))
+            chunk_no += 1
+        chunk, chunk_size = {}, 0
     jobs = []
-    for cid, c in chars.items():
-        if c['type'] == 'shape':
-            jobs.append((f's{cid}', os.path.join(EXT, 'shapes', f'{cid}.svg')))
-        elif c['type'] == 'text':
-            jobs.append((f't{cid}', os.path.join(EXT, 'texts-svg', f'{cid}.svg')))
+    for cid in sorted(chars):
+        c = chars[cid]
+        if c['type'] not in ('shape', 'text'):
+            continue
+        svg = os.path.join(EXT, 'shapes' if c['type'] == 'shape' else 'texts-svg', f'{cid}.svg')
+        ops = vectors.convert(svg)
+        if ops is None:  # bitmap fills: keep a raster
+            jobs.append((f"{'s' if c['type'] == 'shape' else 't'}{cid}", svg))
+            continue
+        chunk[str(cid)] = ops
+        c['vec'] = f'v{chunk_no}'
+        n_vec += 1
+        chunk_size += len(json.dumps(ops, separators=(',', ':')))
+        if chunk_size > 400_000:
+            flush_chunk()
+    flush_chunk()
+    print(f'{n_vec} vector characters in {chunk_no} chunks')
     print(f'rasterising {len(jobs)} svgs…')
     with ThreadPoolExecutor(os.cpu_count()) as ex:
         results = list(ex.map(rasterise, jobs))

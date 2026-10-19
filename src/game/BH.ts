@@ -6,8 +6,8 @@ import { renderer, Symbol } from '../flash/runtime';
 import type { SwfClip } from '../swf/display';
 import type { Main } from './Main';
 
-/** Bitmaps are rendered at this multiple of Flash pixels for crisp upscaled display. */
-const RES = 2;
+/** Bitmaps are rendered at the screen's pixel density (at least 2×) so effects stay crisp when scaled. */
+const res = () => Math.min(4, Math.max(2, Math.ceil(renderer.resolution)));
 
 interface BitInfo {
   pos?: number;
@@ -69,7 +69,7 @@ export class BH extends Symbol {
     return renderer.generateTexture({
       target: this as Container,
       frame: new Rectangle(0, 0, Math.max(1, uint(w)), Math.max(1, uint(h))),
-      resolution: RES,
+      resolution: res(),
       antialias: true,
     });
   }

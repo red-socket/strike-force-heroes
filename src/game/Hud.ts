@@ -947,7 +947,7 @@ export class Hud extends Symbol {
         x = def.bounds[0] + 2;
       }
       if (!s.text) continue;
-      const t = new Text({ text: s.text, resolution: 2, style: { fontFamily: family, fontSize: size, fill: s.color } });
+      const t = new Text({ text: s.text, style: { fontFamily: family, fontSize: size, fill: s.color } });
       t.alpha = alpha;
       t.position.set(x, def.bounds[1] + 2 + line * lineH);
       x += t.width;

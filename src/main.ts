@@ -1,5 +1,5 @@
 // Boot: load the converted SWF library, create the Pixi app and run the fixed 30 Hz loop.
-import { Application } from 'pixi.js';
+import { Application, Filter } from 'pixi.js';
 import { toFlashKey } from './flash/as3';
 import { initRuntime, mouse } from './flash/runtime';
 import { installTimelineSound, loadSounds, setMasterVolume } from './flash/sound';
@@ -29,6 +29,10 @@ async function boot() {
   const app = new Application();
   await app.init({ width: W, height: H, background: 0x000000, antialias: true, autoDensity: true, resolution: 1, useBackBuffer: true, preference: 'webgl' });
   installSwfMasks();
+  // Filters (glows, blurs, colour transforms) render at the screen's pixel density with MSAA, like the
+  // rest of the vector art, instead of Pixi's default 1× aliased intermediate textures.
+  Filter.defaultOptions.resolution = 'inherit';
+  Filter.defaultOptions.antialias = 'inherit';
   host.appendChild(app.canvas);
   app.ticker.stop();
   initRuntime(lib, app.renderer, app.stage);

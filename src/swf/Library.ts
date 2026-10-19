@@ -1,4 +1,5 @@
-import { Assets, Rectangle, Texture, TextureSource } from 'pixi.js';
+import { Assets, GraphicsContext, Rectangle, Texture, TextureSource } from 'pixi.js';
+import { buildVector, vectorIsClear, type VecOp } from './vector';
 import type { CharDef, LibraryData, SpriteDef } from './types';
 
 /** Character dictionary + lazily loaded textures for the converted SWF. */
@@ -7,6 +8,9 @@ export class Library {
   readonly base: string;
   private pages = new Map<string, Texture>();
   private loading = new Map<string, Promise<Texture>>();
+  private vecChunks = new Map<string, Record<string, VecOp[]>>();
+  private vecLoading = new Map<string, Promise<Record<string, VecOp[]>>>();
+  private vecContexts = new Map<number, GraphicsContext>();
   private static placeholder = new TextureSource({ width: 1, height: 1, label: 'swf-placeholder' });
   private frames = new Map<number, Texture>();
   private closures = new Map<string, Set<number>>();
@@ -91,18 +95,63 @@ export class Library {
   /** Ensure every texture page used by the given characters (and their children) is loaded. */
   async preload(ids: Iterable<number>): Promise<void> {
     const pages = new Set<string>();
+    const chunks = new Set<string>();
     for (const root of ids) {
       for (const cid of this.closure(root)) {
         const c = this.data.characters[cid];
-        if (c && (c.type === 'shape' || c.type === 'text') && !this.pages.has(c.tex[0])) pages.add(c.tex[0]);
+        if (!c || (c.type !== 'shape' && c.type !== 'text')) continue;
+        if (c.vec) {
+          if (!this.vecChunks.has(c.vec)) chunks.add(c.vec);
+        } else if (c.tex && !this.pages.has(c.tex[0])) pages.add(c.tex[0]);
       }
     }
-    await Promise.all([...pages].map((p) => this.loadPage(p)));
+    await Promise.all([...[...pages].map((p) => this.loadPage(p)), ...[...chunks].map((v) => this.loadVecChunk(v))]);
+  }
+
+  private loadVecChunk(name: string): Promise<Record<string, VecOp[]>> {
+    let pr = this.vecLoading.get(name);
+    if (!pr) {
+      pr = fetch(`${this.base}vec/${name}.json`)
+        .then((r) => r.json())
+        .then((d: Record<string, VecOp[]>) => (this.vecChunks.set(name, d), d));
+      this.vecLoading.set(name, pr);
+    }
+    return pr;
+  }
+
+  /** Vector ops for a character if its chunk is loaded (undefined: not a vector character / not loaded). */
+  vectorOps(id: number): VecOp[] | undefined {
+    const c = this.char(id) as { vec?: string };
+    return c.vec ? this.vecChunks.get(c.vec)?.[id] : undefined;
+  }
+
+  isVectorClear(id: number): boolean {
+    const ops = this.vectorOps(id);
+    return !!ops && vectorIsClear(ops);
+  }
+
+  /**
+   * Shared GraphicsContext for a vector character. Calls `ready` immediately if available, otherwise
+   * once its data chunk has loaded (preload to avoid pop-in).
+   */
+  vector(id: number, ready: (ctx: GraphicsContext) => void): void {
+    const cached = this.vecContexts.get(id);
+    if (cached) return ready(cached);
+    const c = this.char(id) as { vec?: string };
+    if (!c.vec) throw new Error(`character ${id} has no vector data`);
+    const make = (chunk: Record<string, VecOp[]>) => {
+      let ctx = this.vecContexts.get(id);
+      if (!ctx) this.vecContexts.set(id, (ctx = buildVector(chunk[id] ?? [])));
+      ready(ctx);
+    };
+    const chunk = this.vecChunks.get(c.vec);
+    if (chunk) make(chunk);
+    else void this.loadVecChunk(c.vec).then(make);
   }
 
   /** Wait for every page load started so far (including lazy ones). */
   async idle(): Promise<void> {
-    await Promise.all(this.loading.values());
+    await Promise.all([...this.loading.values(), ...this.vecLoading.values()]);
   }
 
   private loadPage(p: string): Promise<Texture> {
@@ -127,7 +176,7 @@ export class Library {
     let t = this.frames.get(id);
     if (t) return t;
     const c = this.char(id);
-    if (c.type !== 'shape' && c.type !== 'text') throw new Error(`character ${id} has no texture`);
+    if ((c.type !== 'shape' && c.type !== 'text') || !c.tex) throw new Error(`character ${id} has no texture`);
     const [page, x, y, w, h] = c.tex;
     const src = this.pages.get(page);
     if (src) {

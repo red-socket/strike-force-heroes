@@ -22,6 +22,7 @@ import 'pixi.js/advanced-blend-modes';
 // premultiplied-correct replacements for the Flash blend modes (registered over Pixi's after the import above)
 import { DarkenBlend, DifferenceBlend, HardLightBlend, LightenBlend, OverlayBlend, SubtractBlend } from './blendModes';
 import { applyColorTransform, toPixiFilters } from './effects';
+import { FlashGradient } from './vector';
 import type { Library } from './Library';
 import { Timeline, type DepthState } from './Timeline';
 import type { ButtonDef, EditTextDef, MorphDef, SoundStart, SpriteDef } from './types';
@@ -215,15 +216,36 @@ export function createCharacter(lib: Library, id: number): Container {
 }
 
 /** Rasterised shape / static text: wrapper whose local space matches Flash's. */
+/** Graphics drawing a shared per-character context; never destroys that shared context. */
+class VectorGraphics extends Graphics {
+  override destroy(options?: Parameters<Graphics['destroy']>[0]): void {
+    if (options === true) options = { children: true, texture: true, textureSource: true, context: false };
+    else if (typeof options === 'object' && options) options = { ...options, context: false };
+    super.destroy(options);
+  }
+}
+
 export class SwfShape extends Container {
   readonly charId: number;
+  private lib: Library;
+
   constructor(lib: Library, id: number) {
     super();
     this.charId = id;
-    const c = lib.char(id) as { scale: number; origin: [number, number]; bounds: [number, number, number, number] };
+    this.lib = lib;
+    const c = lib.char(id) as { vec?: string; scale: number; origin: [number, number]; bounds: [number, number, number, number] };
     // Measure by the declared shape bounds (the raster is rounded up to whole pixels).
     const [x0, y0, x1, y1] = c.bounds;
     this.boundsArea = new Rectangle(x0, y0, x1 - x0, y1 - y0);
+    if (c.vec) {
+      // Native vectors: crisp at any screen resolution (filled in when the data chunk arrives).
+      const g = new VectorGraphics();
+      this.addChild(g);
+      lib.vector(id, (ctx) => {
+        if (!g.destroyed) g.context = ctx;
+      });
+      return;
+    }
     const tex = lib.texture(id);
     const fill = solidRectColor(id, tex);
     if (fill !== null) {
@@ -244,6 +266,7 @@ export class SwfShape extends Container {
 
   /** True when the rasterised shape has no visible pixel (all fills alpha 0). Cached per character. */
   isClear(): boolean {
+    if (this.children[0] instanceof VectorGraphics) return this.lib.isVectorClear(this.charId);
     let v = clearShapes.get(this.charId);
     if (v === undefined) {
       v = false;
@@ -662,31 +685,12 @@ function buildMorph(def: MorphDef, t: number): GraphicsContext {
 
 function morphGradient(gr: NonNullable<MorphDef['paths'][number]['fill']>['gradient'] & {}, t: number): FillGradient {
   const m = gr.matrix[0].map((v, i) => lerp(v, gr.matrix[1][i], t));
-  const tp = (x: number, y: number) => ({ x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] });
   const colorStops = gr.stops.map((s) => {
     const c = lerpColor(s.color[0], s.color[1], t);
     const al = lerp(s.alpha[0], s.alpha[1], t);
     return { offset: lerp(s.offset[0], s.offset[1], t), color: `rgba(${c >> 16},${(c >> 8) & 255},${c & 255},${al})` };
   });
-  if (gr.type === 'linear') {
-    return new FillGradient({ type: 'linear', start: tp(-819.2, 0), end: tp(819.2, 0), colorStops, textureSpace: 'global' });
-  }
-  const c = tp(0, 0);
-  const e = tp(819.2, 0);
-  const r = Math.hypot(e.x - c.x, e.y - c.y);
-  const ey = tp(0, 819.2);
-  const ry = Math.hypot(ey.x - c.x, ey.y - c.y);
-  return new FillGradient({
-    type: 'radial',
-    center: c,
-    innerRadius: 0,
-    outerCenter: c,
-    outerRadius: r,
-    scale: r ? ry / r : 1,
-    rotation: Math.atan2(e.y - c.y, e.x - c.x),
-    colorStops,
-    textureSpace: 'global',
-  });
+  return new FlashGradient(gr.type, m, colorStops);
 }
 
 // ------------------------------------------------------------------ text fields
@@ -732,7 +736,6 @@ export class SwfTextField extends Container {
     const col = def.color ?? [0, 0, 0, 255];
     this.field = new Text({
       text: '',
-      resolution: 2,
       style: {
         fontFamily: def.font !== undefined ? lib.fontFamily(def.font) : 'sans-serif',
         fontSize: def.size ?? 12,

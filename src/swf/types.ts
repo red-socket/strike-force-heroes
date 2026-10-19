@@ -45,7 +45,8 @@ export interface FrameDef {
   sounds?: SoundStart[];
 }
 
-interface Rastered { tex: [string, number, number, number, number]; scale: number; origin: [number, number] }
+/** Shapes/texts are either native vectors (`vec` = data chunk) or rasters (`tex`, only bitmap-filled art). */
+interface Rastered { vec?: string; tex?: [string, number, number, number, number]; scale?: number; origin?: [number, number] }
 
 export interface ShapeDef extends Rastered { type: 'shape'; bounds: Rect }
 export interface TextDef extends Rastered { type: 'text'; bounds: Rect; matrix: Mat }
