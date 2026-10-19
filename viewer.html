@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SFH symbol viewer</title>
+<style>
+  body { margin: 0; background: #222; color: #ddd; font: 13px/1.4 system-ui, sans-serif; display: flex; flex-wrap: wrap; gap: 12px; padding: 8px; }
+  #stage { flex: 1 1 600px; min-width: 0; }
+  #stage canvas { display: block; width: 100% !important; height: auto !important; max-width: 1600px; border: 1px solid #444; }
+  #side { width: 320px; display: flex; flex-direction: column; gap: 6px; }
+  input, select, button { font: inherit; background: #333; color: #ddd; border: 1px solid #555; padding: 3px 6px; }
+  #labels { max-height: 300px; overflow: auto; }
+  #labels button { margin: 1px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="side">
+  <label>Symbol (class or id) <input id="sym" list="classes" placeholder="UnitMC" /></label>
+  <datalist id="classes"></datalist>
+  <label>Offset x/y <input id="off" value="400,300" /></label>
+  <label>Zoom <input id="zoom" value="1" size="4" /></label>
+  <div><button id="prev">◀</button> <button id="toggle">⏸</button> <button id="next">▶</button> <span id="frame"></span></div>
+  <div id="labels"></div>
+  <pre id="info"></pre>
+</div>
+<script type="module" src="/src/viewer.ts"></script>
+</body>
+</html>

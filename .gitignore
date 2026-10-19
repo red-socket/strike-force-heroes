@@ -1,0 +1,15 @@
+# Third-party tool binaries (see scripts/extract.sh / README)
+tools/jre/
+tools/ffdec/
+tools/ruffle/
+tools/ruffle-web/
+# Original SWF and raw extraction (regenerate with scripts/extract.sh)
+original/
+extracted/
+# Internal notes / local tooling
+docs/
+.claude/
+.snaps/
+node_modules/
+dist/
+__pycache__/

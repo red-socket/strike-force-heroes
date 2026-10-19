@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+D="$(cd "$(dirname "$0")" && pwd)"
+exec "$D/jre/bin/java" -Xmx6g -jar "$D/ffdec/ffdec.jar" "$@"

@@ -1,0 +1,21 @@
+{
+  "name": "strike-force-heroes",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "assets": "python3 tools/pipeline/build_assets.py"
+  },
+  "dependencies": {
+    "pixi-filters": "^6.1.5",
+    "pixi.js": "^8.22.0",
+    "planck": "^1.5.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

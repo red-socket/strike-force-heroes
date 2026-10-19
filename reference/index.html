@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>SFH reference (Ruffle)</title>
+<style>html,body{margin:0;background:#111;height:100%;display:grid;place-items:center}</style>
+<script src="/tools/ruffle-web/ruffle.js"></script></head>
+<body><div id="c"></div>
+<script>
+  // Serve repo root: python3 -m http.server 8080  → http://localhost:8080/reference/
+  const p = window.RufflePlayer.newest().createPlayer();
+  p.style.width = "800px"; p.style.height = "600px";
+  document.getElementById("c").appendChild(p);
+  // Append ?mute to start silent.
+  const mute = new URLSearchParams(location.search).has("mute");
+  p.load({ url: "/original/strike-force-heroes.swf", autoplay: "on", letterbox: "on", volume: mute ? 0 : 1 });
+</script></body></html>
